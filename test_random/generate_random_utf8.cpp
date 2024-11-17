@@ -7,7 +7,7 @@
 #define MAX_SIZE 6815744 //6001000448LL // 6B tokens (bytes)
 #define MIN_SEQ_LENGTH 32
 #define MAX_SEQ_LENGTH 1024
-#define LOGGING_STEPS 50000LL
+#define LOGGING_STEPS 5000LL
 
 using namespace std;
 
@@ -29,7 +29,7 @@ int main() {
     }
 
     while (totalLength < MAX_SIZE) {
-        length = MAX_SEQ_LENGTH; // () % (MAX_SEQ_LENGTH + 1 - MIN_SEQ_LENGTH) + MIN_SEQ_LENGTH;
+        length = rand() % (MAX_SEQ_LENGTH + 1 - MIN_SEQ_LENGTH) + MIN_SEQ_LENGTH;
         totalLength += length;
         
         if (data == nullptr) {
@@ -40,42 +40,43 @@ int main() {
         }
 
         for (unsigned i = 0; i < length; i++) {
-            uint8_t first = randomByte(0x00, 0xF4);
+            uint8_t first;
+            do {
+                first = randomByte(0x00, 0xF4);
+            } while (first > 0x7F && first < 0xC2);
 
-            if (first <= 0x7F || first >= 0xC2) {
-                if (first <= 0x7F) {
-                    data[i] = first;
-                } else if (first <= 0xDF && i < length-1) {
-                    data[i] = first;
-                    data[++i] = randomByte(0x80, 0xBF);
-                } else if (first == 0xE0 && i < length-2) {
-                    data[i] = first;
-                    data[++i] = randomByte(0xA0, 0xBF);
-                    data[++i] = randomByte(0x80, 0xBF);
-                } else if (first == 0xED && i < length-2) {
-                    data[i] = first;
-                    data[++i] = randomByte(0x80, 0x9F);
-                    data[++i] = randomByte(0x80, 0xBF);
-                } else if (first == 0xEF && i < length-2) {
-                    data[i] = first;
-                    data[++i] = randomByte(0x80, 0xBF);
-                    data[++i] = randomByte(0x80, 0xBF);
-                } else if (first == 0xF0 && i < length-3) {
-                    data[i] = first;
-                    data[++i] = randomByte(0x90, 0xBF);
-                    data[++i] = randomByte(0x80, 0xBF);
-                    data[++i] = randomByte(0x80, 0xBF);
-                } else if (first <= 0xF3 && i < length-3) {
-                    data[i] = first;
-                    data[++i] = randomByte(0x80, 0xBF);
-                    data[++i] = randomByte(0x80, 0xBF);
-                    data[++i] = randomByte(0x80, 0xBF);
-                } else if (first == 0xF4 && i < length-3) {
-                    data[i] = first;
-                    data[++i] = randomByte(0x80, 0x8F);
-                    data[++i] = randomByte(0x80, 0xBF);
-                    data[++i] = randomByte(0x80, 0xBF);
-                }
+            if (first <= 0x7F) {
+                data[i] = first;
+            } else if (first <= 0xDF && i < length-1) {
+                data[i] = first;
+                data[++i] = randomByte(0x80, 0xBF);
+            } else if (first == 0xE0 && i < length-2) {
+                data[i] = first;
+                data[++i] = randomByte(0xA0, 0xBF);
+                data[++i] = randomByte(0x80, 0xBF);
+            } else if (first == 0xED && i < length-2) {
+                data[i] = first;
+                data[++i] = randomByte(0x80, 0x9F);
+                data[++i] = randomByte(0x80, 0xBF);
+            } else if (first == 0xEF && i < length-2) {
+                data[i] = first;
+                data[++i] = randomByte(0x80, 0xBF);
+                data[++i] = randomByte(0x80, 0xBF);
+            } else if (first == 0xF0 && i < length-3) {
+                data[i] = first;
+                data[++i] = randomByte(0x90, 0xBF);
+                data[++i] = randomByte(0x80, 0xBF);
+                data[++i] = randomByte(0x80, 0xBF);
+            } else if (first <= 0xF3 && i < length-3) {
+                data[i] = first;
+                data[++i] = randomByte(0x80, 0xBF);
+                data[++i] = randomByte(0x80, 0xBF);
+                data[++i] = randomByte(0x80, 0xBF);
+            } else if (first == 0xF4 && i < length-3) {
+                data[i] = first;
+                data[++i] = randomByte(0x80, 0x8F);
+                data[++i] = randomByte(0x80, 0xBF);
+                data[++i] = randomByte(0x80, 0xBF);
             }
         }
 

@@ -1,7 +1,7 @@
 import os
 
 # CUDA ONLY
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+# os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 import torch
 import torch.nn as nn
@@ -20,7 +20,7 @@ from models.DecoderTransformer import DecoderTransformer
 
 DATASET_PATH = "datasets/mc4_garbage_train_6M.bin"
 MODEL_PATH = "pretrained/mc4_garbage_scratch_6M.pt"
-NUM_SEQUENCES = 6656
+NUM_SEQUENCES = 12947
 
 def set_seed(seed):
     random.seed(seed)
@@ -29,9 +29,9 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
     torch.use_deterministic_algorithms(True)
 
-set_seed(42) # to ensure reproducibility
+# set_seed(42) # to ensure reproducibility
 
-def make_batch(batch_size, device):
+def make_batch(batch_size, max_len, device):
     inputs = None
     outputs = None
 
@@ -40,8 +40,11 @@ def make_batch(batch_size, device):
             sequence = entry.read(int.from_bytes(seq_len, byteorder="little"))
 
             # Output = Input shifted one token to the right
-            input_sequence = torch.tensor(bytearray(sequence)[:-1], dtype=torch.long, device=device).unsqueeze(0)
-            output_sequence = torch.tensor(bytearray(sequence)[1:], dtype=torch.long, device=device).unsqueeze(0)
+            input_sequence = torch.tensor(bytearray(sequence)[:-1], dtype=torch.long, device=device)
+            output_sequence = torch.tensor(bytearray(sequence)[1:], dtype=torch.long, device=device)
+
+            input_sequence = F.pad(input_sequence, (0, max_len - input_sequence.size()[-1]), 'constant', 0).unsqueeze(0)
+            output_sequence = F.pad(output_sequence, (0, max_len - output_sequence.size()[-1]), 'constant', 0).unsqueeze(0)
 
             if inputs is None and outputs is None:
                 inputs = input_sequence.clone().to(device)
@@ -66,31 +69,33 @@ model = DecoderTransformer(num_layers=1, num_heads=1)
 model.to(device)
 
 # Hyperparameters
-batch_size = 512
+batch_size = 5 # 512 # https://github.com/lersouza/language-transfer/blob/main/lang_transfer/configs/runs/train_scratch.small.gin#L21
+max_seq_len = 1023
 initial_lr = 0
 peak_lr = 2e-4
 end_lr = 2e-5
-warmup_steps = 3000
+warmup_steps = 100 # 3000
 decay_steps = 11445
-eval_steps = 5000
+eval_steps = 100 # 5000
 num_epochs = 3
 
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(ignore_index=0)
 optimizer = optim.AdamW(model.parameters(), lr=peak_lr, weight_decay=0.1)
-num_steps = num_epochs * (NUM_SEQUENCES // batch_size)
+num_steps = 1000 # num_epochs * (NUM_SEQUENCES // batch_size)
 scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps, eta_min=end_lr)
 warmup_scheduler = warmup.LinearWarmup(optimizer, warmup_period=warmup_steps)
 
-# Plot data
+# Plot data (loss + perplexity)
 plot_steps = []
 plot_losses = []
+plot_perplexities = []
 
 model.train()
 step = 0
 
 for epoch in range(num_epochs):
     print(f"In epoch {epoch+1}")
-    for inputs, outputs in make_batch(batch_size, device):
+    for inputs, outputs in make_batch(batch_size, max_seq_len, device):
         if not isinstance(inputs, torch.Tensor) and not isinstance(outputs, torch.Tensor) and inputs == 0 and outputs == 0:
             break
 
@@ -102,6 +107,7 @@ for epoch in range(num_epochs):
             print(f'Step [{step}/{num_steps}], loss: {loss.item():.4f}, perplexity: {torch.exp(loss).item():.2f}')
             plot_steps.append(step)
             plot_losses.append(loss.item())
+            plot_perplexities.append(torch.exp(loss).item())
         
         loss.backward()
         optimizer.step()
@@ -121,8 +127,9 @@ print(f'Step [{step}/{num_steps}], loss: {loss.item():.4f}, perplexity: {torch.e
 # Save state dict to file
 torch.save(model, MODEL_PATH)
 
-# Plot losses
+# Plot losses and perplexities
 plt.plot(plot_steps, plot_losses, label="Loss")
+plt.plot(plot_steps, plot_perplexities, label="Perplexity")
 plt.xlabel("Step of training")
 plt.legend(loc="upper right")
 plt.show()
