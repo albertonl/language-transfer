@@ -6,9 +6,10 @@ from models.DecoderLayer import DecoderLayer
 
 class DecoderTransformer(nn.Module):
     def __init__(self, vocab_size=256, embed_dim=640, num_layers=10, num_heads=10,
-                 head_dim=64, ffw_hidden_dim=2560, max_seq_len=1024):
+                 head_dim=64, ffw_hidden_dim=2560, max_seq_len=1024, device='cuda'):
         super().__init__()
         self.embed_dim = embed_dim
+        self.device = device
 
         # Embedding layer (256 [one-hot] -> 640 [embedding])
         self.word_embedding = nn.Embedding(vocab_size, embed_dim)
@@ -51,7 +52,8 @@ class DecoderTransformer(nn.Module):
     def forward(self, x, mask=None):
         # X is a matrix of size (batch_size, seq_len)
         seq_len = x.size(1) # maximum sequence length in batch
-        positions = torch.arange(0, seq_len, 1)
+        positions = torch.arange(0, seq_len, 1).to(self.device)
+        x.to(self.device)
 
         # Word & Positional Embeddings
         tok_emb = self.word_embedding(x) # (batch_size, seq_len, embd_dim)

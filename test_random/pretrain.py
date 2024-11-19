@@ -1,7 +1,7 @@
 import os
 
 # CUDA ONLY
-# os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 import torch
 import torch.nn as nn
@@ -11,16 +11,16 @@ from torch.optim import lr_scheduler
 
 import pytorch_warmup as warmup
 
-import math
 import random
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
 
 from models.DecoderTransformer import DecoderTransformer
 
-DATASET_PATH = "datasets/mc4_garbage_train_6M.bin"
-MODEL_PATH = "pretrained/mc4_garbage_scratch_6M.pt"
-NUM_SEQUENCES = 12947
+DATASET_PATH = ''
+MODEL_PATH = ''
+NUM_SEQUENCES = 0
 
 def set_seed(seed):
     random.seed(seed)
@@ -30,6 +30,21 @@ def set_seed(seed):
     torch.use_deterministic_algorithms(True)
 
 # set_seed(42) # to ensure reproducibility
+
+def config(size, lang):
+    global DATASET_PATH
+    global MODEL_PATH
+    global NUM_SEQUENCES
+
+    DATASET_PATH = f"datasets/mc4_{lang}_train_{size}.bin"
+    MODEL_PATH = f"pretrained/mc4_{lang}_scratch_{size}.pt"
+
+    with open(f"datasets/mc4_garbage_train_{size}.stats", 'r') as stats:
+        line = stats.readline() # first line is discarded
+        line = stats.readline().split()
+
+        if line[-2] == 'sequences:':
+            NUM_SEQUENCES = int(line[-1])
 
 def make_batch(batch_size, max_len, device):
     inputs = None
@@ -55,7 +70,7 @@ def make_batch(batch_size, max_len, device):
 
             if inputs.size()[0] == batch_size:
                 yield inputs, outputs
-                # yield torch.tensor(inputs).to(device), torch.tensor(outputs).to(device)
+                
                 inputs = None
                 outputs = None
             elif len(inputs) > batch_size:
@@ -63,73 +78,84 @@ def make_batch(batch_size, max_len, device):
     
     return 0, 0 # a return value of 0 indicates EOF (also end of epoch)
 
-vocab_size = 256
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-model = DecoderTransformer(num_layers=1, num_heads=1)
-model.to(device)
+def pretrain(device='cuda', num_layers=10, num_heads=10, batch_size=512,
+             max_seq_len=1024, peak_lr=2e-4, end_lr=2e-5, weight_decay=0.1, warmup_steps=3000, decay_steps=11445,
+             eval_count=10, num_epochs=3):
+    
+    num_steps = num_epochs * (NUM_SEQUENCES // batch_size)
+    eval_steps = num_steps // eval_count
+    model = DecoderTransformer(num_layers=num_layers, num_heads=num_heads, device=device)
+    model.to(device)
 
-# Hyperparameters
-batch_size = 5 # 512 # https://github.com/lersouza/language-transfer/blob/main/lang_transfer/configs/runs/train_scratch.small.gin#L21
-max_seq_len = 1023
-initial_lr = 0
-peak_lr = 2e-4
-end_lr = 2e-5
-warmup_steps = 100 # 3000
-decay_steps = 11445
-eval_steps = 100 # 5000
-num_epochs = 3
+    criterion = nn.CrossEntropyLoss(ignore_index=0)
+    optimizer = optim.AdamW(model.parameters(), lr=peak_lr, weight_decay=0.1)
+    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps, eta_min=end_lr)
+    warmup_scheduler = warmup.LinearWarmup(optimizer, warmup_period=warmup_steps)
 
-criterion = nn.CrossEntropyLoss(ignore_index=0)
-optimizer = optim.AdamW(model.parameters(), lr=peak_lr, weight_decay=0.1)
-num_steps = 1000 # num_epochs * (NUM_SEQUENCES // batch_size)
-scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps, eta_min=end_lr)
-warmup_scheduler = warmup.LinearWarmup(optimizer, warmup_period=warmup_steps)
+    # Training statistics
+    step_intervals, losses, perplexities = [], [], []
 
-# Plot data (loss + perplexity)
-plot_steps = []
-plot_losses = []
-plot_perplexities = []
+    model.train()
+    step = 0
 
-model.train()
-step = 0
+    for epoch in range(num_epochs):
+        print(f'In epoch {epoch+1}')
+        for inputs, outputs in make_batch(batch_size, max_seq_len, device):
+            if not isinstance(inputs, torch.Tensor) and not isinstance(outputs, torch.Tensor) and inputs == 0 and outputs == 0:
+                break
+            
+            optimizer.zero_grad()
+            logits = model(inputs)
+            loss = criterion(logits.view(-1, logits.size(-1)), outputs.view(-1))
 
-for epoch in range(num_epochs):
-    print(f"In epoch {epoch+1}")
-    for inputs, outputs in make_batch(batch_size, max_seq_len, device):
-        if not isinstance(inputs, torch.Tensor) and not isinstance(outputs, torch.Tensor) and inputs == 0 and outputs == 0:
-            break
+            if step % eval_steps == 0:
+                print(f'Step [{step}/{num_steps}], loss: {loss.item():.4f}, perplexity: {torch.exp(loss).item():.2f}')
+                step_intervals.append(step)
+                losses.append(loss.item())
+                perplexities.append(torch.exp(loss).item())
+            
+            loss.backward()
+            optimizer.step()
 
-        optimizer.zero_grad()
-        logits = model(inputs)
-        loss = criterion(logits.view(-1, logits.size(-1)), outputs.view(-1))
-        
-        if step % eval_steps == 0:
-            print(f'Step [{step}/{num_steps}], loss: {loss.item():.4f}, perplexity: {torch.exp(loss).item():.2f}')
-            plot_steps.append(step)
-            plot_losses.append(loss.item())
-            plot_perplexities.append(torch.exp(loss).item())
-        
-        loss.backward()
-        optimizer.step()
+            with warmup_scheduler.dampening():
+                scheduler.step()
+            
+            step += 1
 
-        with warmup_scheduler.dampening():
-            scheduler.step()
-        
-        step += 1
-
+            if step == num_steps:
+                break
         if step == num_steps:
             break
-    if step == num_steps:
-        break
+    
+    print(f'Step [{step}/{num_steps}], loss: {loss.item():.4f}, perplexity: {torch.exp(loss).item():.2f}')
+    
+    print('-- TRAINING SUMMARY --')
+    print(f'Step Intervals: {step_intervals}')
+    print(f'Evolution of loss: {losses}')
+    print(f'Evolution of perplexity: {perplexities}')
 
-print(f'Step [{step}/{num_steps}], loss: {loss.item():.4f}, perplexity: {torch.exp(loss).item():.2f}')
+    # Save state dict to file
+    torch.save(model, MODEL_PATH)
 
-# Save state dict to file
-torch.save(model, MODEL_PATH)
+    # Plot loss
+    plt.plot(step_intervals, losses, label='Cross-Entropy Loss')
+    plt.xlabel('Step of training')
+    plt.ylabel('Loss')
+    plt.legend(loc='upper right')
+    plt.show()
 
-# Plot losses and perplexities
-plt.plot(plot_steps, plot_losses, label="Loss")
-plt.plot(plot_steps, plot_perplexities, label="Perplexity")
-plt.xlabel("Step of training")
-plt.legend(loc="upper right")
-plt.show()
+    return model
+
+if __name__ == '__main__':
+    set_seed(42) # to ensure reproducibility
+
+    parser = argparse.ArgumentParser(prog='pretrain')
+    parser.add_argument('-s', '--size', choices=['6M', '60M', '189M', '600M', '6B'], help='Size of the dataset', required=True)
+    parser.add_argument('-l', '--lang', default='garbage', help='Language of the pretraining dataset')
+    args = parser.parse_args()
+
+    # device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    config(args.size, args.lang)
+    model = pretrain(num_layers=10, num_heads=10, device=device)
