@@ -1,10 +1,10 @@
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
+#include <map>
 
-#define OUTPUT_FILE "mc4_garbage_train_6M.bin"
-#define STATS_FILE "mc4_garbage_train_6M.stats"
-#define MAX_SIZE 6815744 //6001000448LL // 6B tokens (bytes)
+#define OUTPUT_FILE(size) "temp_mc4_garbage_train_" + size + ".bin"
+#define STATS_FILE(size) "temp_mc4_garbage_train_" + size + ".stats"
 #define MIN_SEQ_LENGTH 32
 #define MAX_SEQ_LENGTH 1024
 #define LOGGING_STEPS 5000LL
@@ -12,23 +12,45 @@
 using namespace std;
 
 uint8_t randomByte(uint8_t first, uint8_t last);
-void writeStats(long long numSequences, long long byteLength);
+void writeStats(long long numSequences, long long byteLength, long long maxSize, const string SIZE);
 
-int main() {
+int main(int argc, const char* argv[]) {
+    if (argc != 2) {
+        cerr << "Usage: " << argv[0] << " <DATASET_SIZE>\n"
+             << "Allowed sizes: 6M, 19M, 60M, 189M, 600M, 6B" << endl;
+        return 1;
+    }
+
+    const string SIZE = argv[1];
+
     unsigned long long totalLength = 0;
     unsigned long long numSequences = 0;
     uint32_t length;
     uint8_t* data = nullptr;
-    ofstream out(OUTPUT_FILE, ios::binary);
+    ofstream out(OUTPUT_FILE(SIZE), ios::binary);
+
+    const map<string, long long> sizes = {
+        {"6M", 6815744LL},
+        {"19M", 19398656LL},
+        {"60M", 60817408LL},
+        {"189M", 189267968LL},
+        {"600M", 600834048LL},
+        {"6B", 6001000448LL}
+    };
     
-    srand(1234); // constant seed for reproducibility
+    if (sizes.find(SIZE) == sizes.end()) {
+        cerr << "Unknown size value \'" << SIZE << "\'" << endl;
+        return 1;
+    }
 
     if (!out) {
         cerr << "Problem opening output file" << endl;
         return 1;
     }
 
-    while (totalLength < MAX_SIZE) {
+    srand(1234); // constant seed for reproducibility
+
+    while (totalLength < sizes.at(SIZE)) {
         length = rand() % (MAX_SEQ_LENGTH + 1 - MIN_SEQ_LENGTH) + MIN_SEQ_LENGTH;
         totalLength += length;
         
@@ -87,15 +109,15 @@ int main() {
         data = nullptr;
 
         if (++numSequences % LOGGING_STEPS == 0) {
-            cout << "[" << totalLength << "/" << MAX_SIZE << "] " << setprecision(2)
-                 << 100.0 * ((double) totalLength / MAX_SIZE) << "\% completed: "
+            cout << "[" << totalLength << "/" << sizes.at(SIZE) << "] " << setprecision(2)
+                 << 100.0 * ((double) totalLength / sizes.at(SIZE)) << "\% completed: "
                  << numSequences << " sequences" << endl;
         }
     }
 
     out.close();
 
-    writeStats(numSequences, totalLength);
+    writeStats(numSequences, totalLength, sizes.at(SIZE), SIZE);
 
     return 0;
 }
@@ -104,14 +126,14 @@ uint8_t randomByte(uint8_t first, uint8_t last) {
     return rand() % (last + 1 - first) + first;
 }
 
-void writeStats(long long numSequences, long long byteLength) {
-    ofstream stats(STATS_FILE);
+void writeStats(long long numSequences, long long byteLength, long long maxSize, const string SIZE) {
+    ofstream stats(STATS_FILE(SIZE));
 
     if (stats) {
-        stats << "Dataset: " << OUTPUT_FILE << endl
+        stats << "Dataset: " << OUTPUT_FILE(SIZE) << endl
             << "Number of sequences: " << numSequences << endl
             << "Total combined length of sequences (bytes): " << byteLength << endl
-            << "Maximum expected combined length (bytes): " << MAX_SIZE << endl;
+            << "Maximum expected combined length (bytes): " << maxSize << endl;
     }
 
     stats.close();
